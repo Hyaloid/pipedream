@@ -40,6 +40,13 @@ def send_tensor_helper(tensor, dst_rank, group, tag, num_iterations,
             dist.send(tensor=tensor.cpu(), dst=dst_rank, tag=tag)
     end_time = time.time()
     dist.barrier()
+    size = tensor.size()[0]
+    throughput = (size * 4. * num_iterations) / (
+        (end_time - start_time) * 10**9)
+    print("Time to send %s MB: %.3f seconds" %
+        ((size * 4.) / 10**6,
+         (end_time - start_time) / num_iterations))
+    print("Throughput: %.3f GB/s" % throughput)
 
 
 if __name__ == '__main__':

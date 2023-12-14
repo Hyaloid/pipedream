@@ -664,6 +664,7 @@ class StageRuntime:
         if self.stage == 0 or self.stage is None:
             return loader_size
 
+        print('> haisha loader_size is :', loader_size)
         num_iterations = loader_size * self.num_ranks_in_first_stage
         assert num_iterations % self.num_ranks_in_stage == 0
         num_iterations = num_iterations // self.num_ranks_in_stage

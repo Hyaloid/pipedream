@@ -25,6 +25,7 @@ class VGG16Split(torch.nn.Module):
 
     def _initialize_weights(self):
         for m in self.modules():
+            print("> haisha module m is : ", m)
             if isinstance(m, torch.nn.Conv2d):
                 torch.nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:

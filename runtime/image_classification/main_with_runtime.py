@@ -127,9 +127,11 @@ def main():
 
     # create stages of the model
     module = importlib.import_module(args.module)
-    args.arch = module.arch()
-    model = module.model(criterion)
+    print('> haisha module.arch() is: ', module.arch())
+    args.arch = module.arch()   # arch is vgg16
+    model = module.model(criterion) # model is :...
 
+    print('> haisha module.model() is: ', model)
     # determine shapes of all tensors in passed-in model
     if args.arch == 'inception_v3':
         input_size = [args.batch_size, 3, 299, 299]
@@ -293,6 +295,7 @@ def main():
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    print('> haisha loader_size 1 is : ', len(train_loader))
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.eval_batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=val_sampler, drop_last=True)
@@ -337,7 +340,7 @@ def train(train_loader, r, optimizer, epoch):
     top5 = AverageMeter()
 
     # switch to train mode
-    n = r.num_iterations(loader_size=len(train_loader))
+    n = r.num_iterations(loader_size=len(train_loader)) # loader_size：256233
     if args.num_minibatches is not None:
         n = min(n, args.num_minibatches)
     r.train(n)

@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/
 
 COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+#RUN pip install -r requirements.txt
 
 # Bring in changes from outside container to /tmp
 # (assumes pre_hook.patch is in same directory as Dockerfile)

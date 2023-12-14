@@ -60,7 +60,7 @@ parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=5, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
@@ -80,7 +80,7 @@ parser.add_argument('--profile_directory', default="profiles/",
                     help="Profile directory")
 parser.add_argument('--forward_only', action='store_true',
                     help="Run forward pass only")
-parser.add_argument('--num_minibatches', default=None, type=int,
+parser.add_argument('--num_minibatches', default=2, type=int,
                     help="Number of minibatches to run")
 parser.add_argument('--log_reduce_times', action='store_true',
                     help="Log reduce times")
@@ -201,7 +201,11 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    cudnn.benchmark = True
+    """
+    如果网络的输入数据维度或者类型上变化不大时，设置 cudnn.benchmark = True 可以增加允许效率
+    如果网络的输入数据在每次 iteration 都变化的话，会导致 cudnn 每次都去寻找一遍最优配置，这样反而会降低运行效率
+    """
+    cudnn.benchmark = True  # 让内置的 cudnnn 的 auto-tuner 自动寻找最适合当前配置的高效算法，来达到优化运行效率的问题
 
     # Data loading code
     traindir = os.path.join(args.data_dir, 'train')
