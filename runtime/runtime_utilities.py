@@ -26,3 +26,34 @@ class RuntimeStats:
     def reset_stats(self):
         for i in self.stats.keys():
             self.stats[i] = 0.0
+
+import sys
+from datetime import datetime
+
+def forward_start_time(stage):
+    with open('alexnet4_straight.txt', 'a') as file:
+        original_stdout = sys.stdout
+        sys.stdout = file
+        print(f'haisha > {datetime.now().strftime("[%H:%M:%S.%f]")} stage {stage} : start to do forward')
+        sys.stdout = original_stdout
+
+def forward_finish_time(stage):
+    with open('alexnet4_straight.txt', 'a') as file:
+        original_stdout = sys.stdout
+        sys.stdout = file
+        print(f'haisha > {datetime.now().strftime("[%H:%M:%S.%f]")} stage {stage} : finish to do forward')
+        sys.stdout = original_stdout
+
+def backward_start_time(stage):
+    with open('alexnet4_straight.txt', 'a') as file:
+        original_stdout = sys.stdout
+        sys.stdout = file
+        print(f'haisha > {datetime.now().strftime("[%H:%M:%S.%f]")} stage {stage} : start to do backward')
+        sys.stdout = original_stdout
+
+def backward_finish_time(stage):
+    with open('alexnet4_straight.txt', 'a') as file:
+        original_stdout = sys.stdout
+        sys.stdout = file
+        print(f'haisha > {datetime.now().strftime("[%H:%M:%S.%f]")} stage {stage} : finish to do backward')
+        sys.stdout = original_stdout

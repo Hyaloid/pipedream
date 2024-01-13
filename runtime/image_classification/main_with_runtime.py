@@ -83,7 +83,7 @@ parser.add_argument('-s', '--synthetic_data', action='store_true',
                     help="Use synthetic data")
 parser.add_argument('-v', '--verbose_frequency', default=0, type=int, metavar='N',
                     help="Log verbose information")
-parser.add_argument('--num_ranks_in_server', default=1, type=int,
+parser.add_argument('--num_ranks_in_server', default=4, type=int,
                     help="number of gpus per machine")
 # Recompute tensors from forward pass, instead of saving them.
 parser.add_argument('--recompute', action='store_true',
@@ -148,6 +148,7 @@ def main():
                                        dtype=torch.float32)
             input_tensors.append(input_tensor)
         with torch.no_grad():
+            # forward in each stage
             output_tensors = stage(*tuple(input_tensors))
         if not type(output_tensors) is tuple:
             output_tensors = [output_tensors]
@@ -198,8 +199,11 @@ def main():
     args.stage = r.stage
     args.num_stages = r.num_stages
     args.num_ranks = r.num_ranks
-    if not is_first_stage():
-        args.synthetic_data = True
+    '''
+    I think every stage should have the same datasets, so annotate this line
+    '''
+    # if not is_first_stage():
+    #     args.synthetic_data = True
 
     # define optimizer
     if args.no_input_pipelining:
@@ -257,6 +261,7 @@ def main():
             train_dataset = SyntheticDataset((3, 224, 224), 1000000)
         else:
             traindir = os.path.join(args.data_dir, 'train')
+            # only first stage will go here
             train_dataset = datasets.ImageFolder(
                 traindir,
                 transforms.Compose([
@@ -295,7 +300,6 @@ def main():
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
-    print('> haisha loader_size 1 is : ', len(train_loader))
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.eval_batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=val_sampler, drop_last=True)
@@ -313,34 +317,50 @@ def main():
         if args.forward_only:
             validate(val_loader, r, epoch)
         else:
-            train(train_loader, r, optimizer, epoch)
+            # if epoch == 0:
+                # train(train_loader, r, optimizer, epoch, skip=True)
+            # else:
+            cnt_minibatches = 0
+            n = r.num_iterations(loader_size=len(train_loader))
+            if args.num_minibatches is not None:
+                n = min(n, args.num_minibatches)
+            while cnt_minibatches <= r.num_iterations(loader_size=len(train_loader)):
+                if cnt_minibatches < 200:
+                    skip = True
+                else:
+                    skip = False
+                if cnt_minibatches >= r.num_iterations(loader_size=len(train_loader)):
+                    train(train_loader, r, optimizer, epoch, cnt_minibatches - n, r.num_iterations(loader_size=len(train_loader)), skip=skip, warm_up=False)
+                # all warm_up is False will cause F-then-B
+                else:
+                    train(train_loader, r, optimizer, epoch, cnt_minibatches, cnt_minibatches + n, skip=skip)
+                # evaluate on validation set
+                prec1 = validate(val_loader, r, epoch)
+                if r.stage != r.num_stages: prec1 = 0
 
-            # evaluate on validation set
-            prec1 = validate(val_loader, r, epoch)
-            if r.stage != r.num_stages: prec1 = 0
+                # remember best prec@1 and save checkpoint
+                best_prec1 = max(prec1, best_prec1)
 
-            # remember best prec@1 and save checkpoint
-            best_prec1 = max(prec1, best_prec1)
-
-            should_save_checkpoint = args.checkpoint_dir_not_nfs or r.rank_in_stage == 0
-            if args.checkpoint_dir and should_save_checkpoint:
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'arch': args.arch,
-                    'state_dict': r.state_dict(),
-                    'best_prec1': best_prec1,
-                    'optimizer' : optimizer.state_dict(),
-                }, args.checkpoint_dir, r.stage)
+                should_save_checkpoint = args.checkpoint_dir_not_nfs or r.rank_in_stage == 0
+                if args.checkpoint_dir and should_save_checkpoint:
+                    save_checkpoint({
+                        'epoch': epoch + 1,
+                        'arch': args.arch,
+                        'state_dict': r.state_dict(),
+                        'best_prec1': best_prec1,
+                        'optimizer' : optimizer.state_dict(),
+                    }, args.checkpoint_dir, r.stage)
+                cnt_minibatches += n
 
 
-def train(train_loader, r, optimizer, epoch):
+def train(train_loader, r, optimizer, epoch, start_loop, end_loop, skip=False, warm_up=True):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
 
     # switch to train mode
-    n = r.num_iterations(loader_size=len(train_loader)) # loader_size：256233
+    n = r.num_iterations(loader_size=len(train_loader))
     if args.num_minibatches is not None:
         n = min(n, args.num_minibatches)
     r.train(n)
@@ -360,15 +380,19 @@ def train(train_loader, r, optimizer, epoch):
         print("Running training for %d minibatches" % n)
 
     # start num_warmup_minibatches forward passes
-    for i in range(num_warmup_minibatches):
-        r.run_forward()
-
-    for i in range(n - num_warmup_minibatches):
+    if warm_up:
+        for _ in range(num_warmup_minibatches):
+            r.run_forward(skip=skip)
+        iteration_times = n - num_warmup_minibatches
+    else:
+        iteration_times = end_loop - start_loop
+    print(">>> haisha: iteration_times is : ", iteration_times)
+    for i in range(iteration_times):
         # perform forward pass
-        r.run_forward()
+        r.run_forward(skip=skip)
 
         # Adjust learning rate
-        adjust_learning_rate(optimizer, epoch, args.epochs, r, args.lr_policy, i, n)
+        adjust_learning_rate(optimizer, epoch, args.epochs, r, args.lr_policy, i, iteration_times + num_warmup_minibatches)
 
         if is_last_stage():
             # measure accuracy and record loss
@@ -392,7 +416,7 @@ def train(train_loader, r, optimizer, epoch):
                       'Loss: {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1: {top1.val:.3f} ({top1.avg:.3f})\t'
                       'Prec@5: {top5.val:.3f} ({top5.avg:.3f})'.format(
-                       epoch, i, n, batch_time=batch_time,
+                       epoch, i + start_loop, end_loop, batch_time=batch_time,
                        epoch_time=epoch_time, full_epoch_time=full_epoch_time,
                        loss=losses, top1=top1, top5=top5,
                        memory=(float(torch.cuda.memory_allocated()) / 10**9),
@@ -401,7 +425,7 @@ def train(train_loader, r, optimizer, epoch):
         else:
             if i % args.print_freq == 0:
                 print('Epoch: [{0}][{1}/{2}]\tMemory: {memory:.3f} ({cached_memory:.3f})'.format(
-                       epoch, i, n, memory=(float(torch.cuda.memory_allocated()) / 10**9),
+                       epoch, i + start_loop, end_loop, memory=(float(torch.cuda.memory_allocated()) / 10**9),
                        cached_memory=(float(torch.cuda.memory_cached()) / 10**9)))
                 import sys; sys.stdout.flush()
 
@@ -411,17 +435,18 @@ def train(train_loader, r, optimizer, epoch):
         else:
             optimizer.zero_grad()
         optimizer.load_old_params()
-        r.run_backward()
+        r.run_backward(skip=skip)
         optimizer.load_new_params()
         optimizer.step()
 
     # finish remaining backward passes
-    for i in range(num_warmup_minibatches):
-        optimizer.zero_grad()
-        optimizer.load_old_params()
-        r.run_backward()
-        optimizer.load_new_params()
-        optimizer.step()
+    if warm_up:
+        for i in range(num_warmup_minibatches):
+            optimizer.zero_grad()
+            optimizer.load_old_params()
+            r.run_backward(skip=skip)
+            optimizer.load_new_params()
+            optimizer.step()
 
     # wait for all helper threads to complete
     r.wait()
@@ -458,11 +483,11 @@ def validate(val_loader, r, epoch):
 
     with torch.no_grad():
         for i in range(num_warmup_minibatches):
-            r.run_forward()
+            r.run_forward(skip=True)
 
         for i in range(n - num_warmup_minibatches):
             # perform forward pass
-            r.run_forward()
+            r.run_forward(skip=True)
             r.run_ack()
 
             if is_last_stage():

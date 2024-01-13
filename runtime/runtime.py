@@ -7,8 +7,11 @@ import time
 import torch
 import torch.distributed as dist
 
+import pdb
+
 import communication
 import runtime_utilities
+from runtime_utilities import forward_start_time, forward_finish_time, backward_start_time, backward_finish_time
 
 IMAGE_CLASSIFICATION = "image_classification"
 TRANSLATION = "translation"
@@ -20,6 +23,7 @@ class ModulesWithDependencies:
         self._modules = []
         self._all_input_names = []
         self._all_output_names = []
+        # for dismiss kernel launch time
         for (module, input_names, output_names) in modules_with_dependencies:
             self._modules.append(module)
             self._all_input_names.append(input_names)
@@ -59,6 +63,7 @@ class StageRuntime:
         self.training_tensor_dtypes = training_tensor_dtypes
         self.model_type = model_type
         self.target_tensor_names = target_tensor_names
+        self.warm = 0
 
         self.initialize(model, inputs_module_destinations, configuration_maps,
                         master_addr, rank, local_rank, num_ranks_in_server)
@@ -167,10 +172,13 @@ class StageRuntime:
                 self.num_warmup_minibatches = stage_to_depth_map[
                     str(self.stage)]
             else:
+                # self.num_warmup_minibatches = self.num_ranks - 1
+                # for i in range(self.stage):
+                    # self.num_warmup_minibatches -= len(
+                    #     stage_to_rank_map[i])
+                # haisha edit 按照论文画图设计 warmup minibatches
                 self.num_warmup_minibatches = self.num_ranks - 1
-                for i in range(self.stage):
-                    self.num_warmup_minibatches -= len(
-                        stage_to_rank_map[i])
+                self.num_warmup_minibatches -= int(self.stage)
                 self.num_warmup_minibatches = self.num_warmup_minibatches // \
                     self.num_ranks_in_stage
 
@@ -485,7 +493,7 @@ class StageRuntime:
             self.comm_handler.increment_messaging_index(
                 sending=True)
 
-    def run_forward(self, recompute_step=False):
+    def run_forward(self, recompute_step=False, skip=False, tmp_cnt=None):
         """Run forward pass.
         """
         # Receive tensors from previous worker.
@@ -493,7 +501,7 @@ class StageRuntime:
         tensors = self.tensors[-1]
 
         # Run forward pass.
-        self._run_forward(tensors)
+        self._run_forward(tensors, skip=skip, tmp_cnt=tmp_cnt)
 
         # Send tensors forward.
         self.send_tensors_forward()
@@ -502,12 +510,17 @@ class StageRuntime:
         self.forward_stats.reset_stats()
         self.forward_minibatch_id += 1
 
-    def _run_forward(self, tensors):
+    def _run_forward(self, tensors, skip=False, tmp_cnt=None):
         # Perform forward pass through model (self.modules_with_dependencies already
         # has modules in topological order).
         modules = self.modules_with_dependencies.modules()
         all_input_names = self.modules_with_dependencies.all_input_names()
         all_output_names = self.modules_with_dependencies.all_output_names()
+
+        
+        if skip is False:
+            # pdb.set_trace()
+            forward_start_time(self.stage)
         for i, (module, input_names, output_names) in \
                 enumerate(zip(modules, all_input_names, all_output_names)):
             if i == (len(modules) - 1) and self.is_criterion:
@@ -534,6 +547,9 @@ class StageRuntime:
 
             for (output_name, module_output) in zip(output_names, module_outputs):
                 tensors[output_name] = module_output
+        
+        if skip is False:
+            forward_finish_time(self.stage)
 
         self.output = tensors[input_names[0]]
         if self.is_criterion and self.model_type == TRANSLATION:
@@ -545,7 +561,7 @@ class StageRuntime:
         else:
             self.loss = 1
 
-    def run_backward(self):
+    def run_backward(self, skip=False, tmp_cnt=None):
         # Receive input gradients needed for backward pass.
         self.receive_tensors_backward()
         # Backward pass through modules in reverse order.
@@ -603,9 +619,13 @@ class StageRuntime:
             outputs["loss"] *= self.loss_scale
 
         # Perform backward pass.
+        if skip is False:
+            backward_start_time(self.stage)
         torch.autograd.backward(tuple([outputs[output_name] for output_name in outputs]),
                                 grad_tensors=tuple([output_gradients[output_name]
                                                     for output_name in outputs]))
+        if skip is False:
+            backward_finish_time(self.stage)
 
         # Input tensors don't need gradients.
         for input_name in inputs:
@@ -665,7 +685,9 @@ class StageRuntime:
             return loader_size
 
         print('> haisha loader_size is :', loader_size)
+        print('> haisha num_ranks_in_first_stage is :', self.num_ranks_in_first_stage)
         num_iterations = loader_size * self.num_ranks_in_first_stage
+        print('> haisha num_iterations is :', num_iterations)
         assert num_iterations % self.num_ranks_in_stage == 0
         num_iterations = num_iterations // self.num_ranks_in_stage
 
